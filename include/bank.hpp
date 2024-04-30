@@ -20,12 +20,17 @@ CONTRACT bank : public contract {
             string contract;
         };
         
+        auto incrementcounter(name counter_name);
+        void savetokentx(name player, asset quantity, string operation);
+        
         [[eosio::action]] void setconfig(string key, uint64_t uint_value, int32_t int_value, string string_value, vector<string> arr_value, vector<TOKEN> tkn_value);
         [[eosio::action]] void delconfig(string key);
         [[eosio::action]] void createbank(name player);
         [[eosio::action]] void usebanktkn(name player, asset quantity);
         [[eosio::action]] void usebanknft(name player, int32_t template_id, uint64_t quantity);
         [[eosio::action]] void withdrawtkn(name player, asset quantity);
+        [[eosio::action]] void withdrawnft(name player, int32_t template_id, uint64_t quantity);
+        [[eosio::action]] void delbank(name player);
         
         [[eosio::on_notify("atomicassets::logtransfer")]] void handlenfttransfer(name collection_name, name from, name to, vector<uint64_t> asset_ids, string memo);
         [[eosio::on_notify("*::transfer")]] void handletransfer (name from, name to, asset quantity, string memo);
@@ -62,4 +67,17 @@ CONTRACT bank : public contract {
         };
         typedef multi_index<name("balances"), balances_s> balances_t;
         balances_t balances = balances_t(get_self(), get_self().value);
+        
+        struct [[eosio::table]] tokentx_s {
+            uint64_t id;
+            uint32_t created_at;
+            asset quantity;
+            string operation;
+            
+            uint64_t primary_key() const { return id; }
+        };
+        typedef multi_index<name("tokentx"), tokentx_s> tokentx_t;
+        tokentx_t get_tokentx(name player) {
+            return tokentx_t(get_self(), player.value);
+        }
 };

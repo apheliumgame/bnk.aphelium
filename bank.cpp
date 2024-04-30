@@ -1,5 +1,24 @@
 #include "include/bank.hpp"
 
+auto bank::incrementcounter(name counter_name)
+{
+    auto counter_itr = counters.find(counter_name.value);
+    
+    if (counter_itr == counters.end()) {
+        counter_itr = counters.emplace(get_self(), [&](auto &_c) {
+            _c.counter_name = counter_name;
+            _c.counter_value = 1;
+        });
+    }
+    else {
+        counters.modify(counter_itr, get_self(), [&](auto &_c) {
+           _c.counter_value = counter_itr->counter_value + 1; 
+        });
+    }
+    
+    return counter_itr;
+}
+
 void bank::setconfig(string key, uint64_t uint_value, int32_t int_value, string string_value, vector<string> arr_value, vector<TOKEN> tkn_value)
 {
     require_auth(get_self());
@@ -33,6 +52,19 @@ void bank::delconfig(string key)
     auto itr = configs.require_find(name(key).value, "Config not found");
     
     configs.erase(itr);
+}
+
+void bank::savetokentx(name player, asset quantity, string operation)
+{
+    tokentx_t tokentx = get_tokentx(player);
+    auto counter_itr = incrementcounter(name("tokentx"));
+    
+    tokentx.emplace(get_self(), [&](auto &_itr) {
+        _itr.id = counter_itr->counter_value;
+        _itr.created_at = current_time_point().sec_since_epoch();
+        _itr.quantity = quantity;
+        _itr.operation = operation;
+    });
 }
 
 void bank::handletransfer (name from, name to, asset quantity, string memo)
@@ -76,6 +108,8 @@ void bank::handletransfer (name from, name to, asset quantity, string memo)
     balances.modify(itr, get_self(), [&](auto &_balance) {
         _balance.quantities = quantities;
     });
+    
+    savetokentx(from, quantity, "IN");
 }
 
 void bank::handlenfttransfer (name collection_name, name from, name to, vector<uint64_t> asset_ids, string memo)
@@ -123,6 +157,8 @@ void bank::usebanktkn(name player, asset quantity)
     require_auth(get_self());
     
     auto itr = balances.require_find(player.value, "Bank not found");
+    auto allowedtkns = configs.require_find(name("allowedtkns").value, "Allowed tokens not set, contact an administrator");
+    string symbol = quantity.symbol.code().to_string();
     
     vector <asset> quantities = itr->quantities;
     bool found = false;
@@ -131,20 +167,25 @@ void bank::usebanktkn(name player, asset quantity)
             found = true;
             check(token.amount > quantity.amount, "Insufficent balance");
             token.amount -= quantity.amount;
-            auto config_itr = configs.find(name("bankacc").value);
-            if (config_itr != configs.end()) {
-                action(
-                    permission_level{get_self(), name("active")},
-                    name("eosio.token"),
-                    name("transfer"),
-                    make_tuple(
-                        get_self(),
-                        name(config_itr->string_value),
-                        quantity,
-                        string("bank use")
-                    )
-                ).send();
+            auto config_itr = configs.require_find(name("bankacc").value, "No fund account set, contact an administrator");
+            bool tknconf_found = false;
+            for (TOKEN tknconf : allowedtkns->tkn_value) {
+                if (symbol == tknconf.symbol) {
+                    tknconf_found = true;
+                    action(
+                        permission_level{get_self(), name("active")},
+                        name(tknconf.contract),
+                        name("transfer"),
+                        make_tuple(
+                            get_self(),
+                            name(config_itr->string_value),
+                            quantity,
+                            string("bank use")
+                        )
+                    ).send();
+                }
             }
+            check(tknconf_found, "Token conf not found");
             break;
         }
     }
@@ -154,6 +195,8 @@ void bank::usebanktkn(name player, asset quantity)
     balances.modify(itr, get_self(), [&](auto &_balance) {
         _balance.quantities = quantities;
     });
+    
+    savetokentx(player, quantity, "OUT");
 }
 
 void bank::usebanknft(name player, int32_t template_id, uint64_t quantity)
@@ -229,4 +272,53 @@ void bank::withdrawtkn(name player, asset quantity)
     balances.modify(itr, player, [&](auto &_balance) {
         _balance.quantities = quantities;
     });
+    
+    savetokentx(player, quantity, "OUT");
+}
+
+void bank::withdrawnft(name player, int32_t template_id, uint64_t quantity)
+{
+    require_auth(player);
+    
+    auto itr = balances.require_find(player.value, "Bank not found");
+    
+    vector<uint64_t> assets_totrans;
+    vector<NFT> nfts = itr->nfts;
+    
+    auto nft_itr = nfts.begin();
+    while (nft_itr != nfts.end()) {
+        if (nft_itr->template_id == template_id) {
+            assets_totrans.emplace_back(nft_itr->asset_id);
+            nft_itr = nfts.erase(nft_itr);
+            if (assets_totrans.size() == quantity) break;
+        }
+    }
+    
+    check(assets_totrans.size() == quantity, "Not enough NFTs");
+    
+    // Send the NFT
+    action(
+        permission_level{get_self(), name("active")},
+        name("atomicassets"),
+        name("transfer"),
+        make_tuple(
+            get_self(),
+            player,
+            assets_totrans,
+            std::string("")
+        )
+    ).send();
+    
+    balances.modify(itr, player, [&](auto &_balance) {
+        _balance.nfts = nfts;
+    });
+}
+
+void bank::delbank(name player)
+{
+    require_auth(player);
+    
+    auto itr = balances.require_find(player.value, "Bank not found");
+    
+    balances.erase(itr);
 }
