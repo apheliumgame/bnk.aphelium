@@ -18,6 +18,7 @@ CONTRACT bank : public contract {
         struct TOKEN {
             string symbol;
             string contract;
+            uint8_t precision;
         };
         
         auto incrementcounter(name counter_name);
